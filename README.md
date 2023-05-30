@@ -16,3 +16,7 @@ curl --location 'http://localhost:8080/call' \
 ```
 ### Note
 please specify the app env variable (EXTERNAL_SERVICE) to setup the observable endpoint before build the docker environment.
+
+
+### Story
+https://medium.com/@alaajamal470/opentelemetry-dynamic-integrations-af3061411cbe

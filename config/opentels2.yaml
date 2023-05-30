@@ -1,0 +1,46 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+          endpoint: 0.0.0.0:5555
+      http:
+processors:
+  batch:
+      timeout: 1s
+      send_batch_size: 1024
+exporters:
+  otlp/prepper-traces:
+    endpoint: data-prepper:21890
+    tls:
+      insecure: true
+      insecure_skip_verify: true
+    retry_on_failure:
+      enabled: true
+  otlp/prepper-metrics:
+    endpoint: data-prepper:21891
+    tls:
+      insecure: true
+      insecure_skip_verify: true
+    retry_on_failure:
+      enabled: true
+  otlp/prepper-logs:
+    endpoint: "http://data-prepper:2021"
+    tls:
+      insecure: true
+      insecure_skip_verify: true
+    retry_on_failure:
+      enabled: true
+  otlphttp/dynatrace:
+    endpoint: "https://dynatracer.domain.com"
+    headers:
+      Authorization: "Api-Token BlaBala"
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/prepper-traces, otlphttp/dynatrace]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/prepper-metrics, otlphttp/dynatrace]

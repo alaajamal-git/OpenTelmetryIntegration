@@ -1,0 +1,245 @@
+version: '3.0'
+services:
+  app:
+    profiles:
+      - scenario1
+      - scenario2
+    container_name: app
+    hostname: app
+    build:
+      context: .
+      dockerfile: ./client/Dockerfile
+    environment:
+      - OTEL_PORT=5555
+      - OTEL_PROTOCOL=http
+      - OTEL_HOST=collector
+      - EXTERNAL_SERVICE=https://webhook.site/431f2292-051a-4bc1-88c0-5952ae358ffe
+    ports:
+      - "8080:8080"
+  grafana:
+    image: grafana
+    profiles:
+      - scenario1
+    container_name: grafana
+    hostname: grafana
+    build:
+      context: .
+      dockerfile: ./config/grafana/Dockerfile
+    volumes:
+      - ./config/grafana/grafana-bootstrap.ini:/etc/grafana/grafana.ini
+      - ./config/grafana/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+    ports:
+      - "3000:3000"
+  collector-s2:
+    profiles: ['scenario2']
+    image: otel/opentelemetry-collector:latest
+    container_name: collector
+    hostname: collector
+    volumes:
+      - ./config/opentels2.yaml:/etc/otelcol/config.yaml
+    ports:
+      - "6666:6666"
+      - "5555:5555"
+    depends_on:
+      data-prepper:
+          condition: service_healthy
+  collector-s1:
+    profiles:
+      - scenario1
+    image: otel/opentelemetry-collector:latest
+    container_name: collector
+    hostname: collector
+    volumes:
+      - ./config/opentels1.yaml:/etc/otelcol/config.yaml
+    ports:
+      - "6666:6666"
+      - "5555:5555"
+    depends_on:
+      tempo:
+          condition: service_healthy
+      apm:
+          condition: service_started
+  data-prepper:
+    profiles: ['scenario2']
+    container_name: data-prepper
+    image: data-prepper
+    build:
+      context: .
+      dockerfile: ./config/data-prepper/Dockerfile
+    volumes:
+      - ./config/pipelines.yaml:/usr/share/data-prepper/pipelines/pipelines.yaml
+      - ./config/data-prepper/data-prepper-config.yaml:/usr/share/data-prepper/config/data-prepper-config.yaml
+    ports:
+      - "21890:21890"
+    depends_on:
+      - dashboard
+    healthcheck:
+      test: curl -s http://localhost:4900/list >/dev/null || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 50
+  opensearch:
+    profiles: ['scenario2']
+    container_name: opensearch
+    image: opensearchproject/opensearch:latest
+    environment:
+      - discovery.type=single-node
+      - DISABLE_SECURITY_PLUGIN=true
+      - bootstrap.memory_lock=true 
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536 # maximum number of open files for the OpenSearch user, set to at least 65536 on modern systems
+        hard: 65536
+    ports:
+      - 9200:9200
+      - 9600:9600 # required for Performance Analyzer
+    healthcheck:
+      test: curl -s http://localhost:9200 >/dev/null || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 50
+  dashboard:
+    profiles: ['scenario2']
+    image: opensearch-dashboards-no-security
+    build:
+      context: ./config/dashboard/
+      dockerfile: Dockerfile
+    container_name: dashboard
+    ports:
+      - 5601:5601
+    expose:
+      - "5601"
+    environment:
+      OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
+    depends_on:
+      opensearch:
+          condition: service_healthy
+  prometheus:
+    profiles:
+      - scenario1
+    image: prom/prometheus:v2.39.2
+    container_name: prometheus
+    hostname: prometheus
+    command:
+      - --config.file=/etc/prometheus.yaml
+      - --web.enable-remote-write-receiver
+      - --enable-feature=exemplar-storage
+    volumes:
+      - ./config/prometheus.yaml:/etc/prometheus.yaml
+    ports:
+      - "9090:9090"
+  tempo:
+    profiles:
+      - scenario1
+    image: grafana/tempo:1.5.0
+    command: [ "-search.enabled=true", "-config.file=/etc/tempo.yaml" ]
+    container_name: tempo
+    hostname: tempo
+    volumes:
+      - ./config/tempo-config.yaml:/etc/tempo.yaml
+      - ./config/tempo-overrides.yaml:/etc/overrides.yaml
+      - ./tempo-data:/tmp/tempo
+    ports:
+      - "3200:3200"
+      - "4317:4317"
+    healthcheck:
+      interval: 5s
+      retries: 10
+      test: wget --no-verbose --tries=1 --spider http://localhost:3200/status || exit 1
+
+  apm:
+    profiles:
+      - scenario1
+    container_name: apm-server
+    image: docker.elastic.co/apm/apm-server:8.7.0
+    hostname: apm-server
+    user: apm-server
+    command: -e --strict.perms=false
+    environment:
+      -  output.elasticsearch.hosts=["es-container:9200"]
+    volumes:
+      - ./config/apm-server.yml:/usr/share/apm-server/apm-server.yml:ro
+    ports:
+      - 8200:8200
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      kibana:
+        condition: service_healthy
+  elasticsearch:
+    profiles:
+      - scenario1
+    container_name: es-container
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.7.0
+    hostname: es-container
+    environment:
+      -  xpack.security.enabled=true
+      -  xpack.security.http.ssl.enabled=false
+      -  ELASTIC_PASSWORD=+nwQzsKP+DRCdL2UjST3
+      -  "discovery.type=single-node"
+      -  "http.cors.enabled=true"
+      -  "http.cors.allow-origin='*'"
+      -  "http.cors.allow-methods=OPTIONS, HEAD, GET, POST, PUT, DELETE"
+      -  "http.cors.allow-headers=X-Requested-With,X-Auth-Token,Content-Type,Content-Length"
+      -  "http.cors.allow-credentials=true"
+    ports:
+      - 9200:9200
+      - 9300:9300
+    healthcheck:
+      test: curl -s http://localhost:9200 >/dev/null || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 50
+  kibana:
+    profiles:
+      - scenario1
+    container_name: kb-container
+    image: docker.elastic.co/kibana/kibana:8.7.0
+    hostname: kb-container
+    environment:
+      - ELASTICSEARCH_USERNAME=user
+      - ELASTICSEARCH_PASSWORD=passworD123
+    volumes:
+      - ./config/kibana.yml:/usr/share/kibana/config/kibana.yml
+    ports:
+      - 5601:5601
+    healthcheck:
+      test: curl -s http://localhost:5601 >/dev/null || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 50
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      curl:
+        condition: service_started
+  curl:  
+    profiles:
+      - scenario1
+    container_name: curl
+    image: curlimages/curl:latest
+    command: >
+          curl -X POST 'http://es-container:9200/_security/user/alaajml' -H 'Content-Type: application/json' -H 'Authorization: Basic ZWxhc3RpYzorbndRenNLUCtEUkNkTDJValNUMw==' -d '{
+              "password" : "passworD123",
+              "roles" : [ "kibana_system","apm_system","superuser" ],
+              "full_name" : "user",
+              "email" : "user@example.com",
+              "metadata" : {
+                "intelligence" : 7
+                }
+              }'
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+networks:
+  default:
+    name: opentel

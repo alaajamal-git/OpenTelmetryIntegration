@@ -1,0 +1,1 @@
+#search source=metrics-otel-v1-* | fields name, value, time | where name="mcs_sxs.request_success_number" OR name="mcs_sxs.request_failure_number"
